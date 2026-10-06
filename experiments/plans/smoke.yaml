@@ -1,0 +1,13 @@
+# Humo: comprueba la tubería de experimentos de punta a punta en pocos minutos (no es un experimento).
+name: smoke
+common:
+  num_rollouts: 4
+  max_new_tokens: 192
+  grpo: {max_steps: 4, problems_per_step: 3}
+  checkpoint: {every_steps: 2, eval_every_steps: 2, keep_last: 2}
+  eval: {during_train: [val], during_train_n: 2, select_best: val, ks: [1, 2]}
+final_eval: {splits: [val], n: 2, checkpoint: last}
+arms:
+  A: {}
+  B: {growth: {enabled: true, schedule: [{step: 0, new_layers: 1}, {step: 2, new_layers: 1}]}}
+  U2: {grpo: {updates_per_batch: 2}}

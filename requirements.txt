@@ -1,0 +1,14 @@
+# Linux / WSL2 (Ubuntu). El sandbox usa resource, signal y bubblewrap: no funciona en Windows nativo.
+# Sistema:   sudo apt install bubblewrap python3
+# PyTorch (aparte): pip install torch --index-url https://download.pytorch.org/whl/cu128
+#   RTX 5070 = sm_120 -> exige build CUDA >= 12.8. Comprobar: python -c "import torch;print(torch.cuda.get_arch_list())" (debe incluir sm_120)
+transformers>=4.56
+peft>=0.13
+pyyaml
+nvidia-ml-py
+
+# Licencias verificadas: Qwen2.5-Coder-0.5B-Instruct = Apache-2.0. Qwen2.5-Coder-3B = Qwen-Research (no comercial):
+# tenerlo en cuenta en model growth. Resto (transformers, PyTorch, pyyaml, nvidia-ml-py, bubblewrap como binario
+# externo): licencias permisivas/LGPL según sus repos; no verificadas aquí.
+# Descartado: Qwen3.5-0.8B (híbrido de atención lineal + checkpoint multimodal; dtype se ignora vía AutoModelForCausalLM,
+# transformers#46459) -> se mantiene Qwen2.5-Coder: decoder denso homogéneo, más simple para LoRA/GRPO/growth.

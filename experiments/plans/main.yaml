@@ -1,0 +1,51 @@
+# Experimento principal (fases 2-4). Todos los brazos: mismos datos, semilla, nº de steps (= mismos rollouts) y
+# evaluación final pareada por problema en val (n=16, último checkpoint, no el elegido por val). Test NO se usa para
+# comparar brazos: se reserva para el modelo final.
+# A      baseline: 0.5B + LoRA, 1 optimizer.step por lote (U=1: el ratio es 1 y el clip no actúa), lr 1e-5.
+# U2     ¿limita U=1 el aprendizaje?: 2 pasadas por lote (ratio y clip activos), lr 1e-5.
+# A_lr2  control de U2: con Adam, dos pasos casi iguales ~ un paso con el doble de lr. Si U2 ~= A_lr2, la
+#        "reutilización" es sólo un lr mayor; si U2 > A_lr2 con KL parecido, el ratio/clip aporta algo.
+# DS     dynamic sampling (tipo DAPO): repone los grupos sin varianza (todos con el mismo reward: gradiente 0) con
+#        problemas nuevos hasta tener 6 informativos (máx. 2x problemas por step). Se añadió porque en la calibración
+#        del modelo base 54 de 102 problemas de train salen 0/8 y 8 salen 8/8. OJO: eso NO implica grupos sin varianza
+#        (el reward da crédito parcial por tests pasados); en A sólo ~13 % de los grupos tienen varianza 0.
+# B      crecimiento: A + 4 bloques identidad entrenables (2 al empezar, 2 a mitad); LoRA igual en las capas originales.
+# C      la alternativa a crecer: un modelo preentrenado mayor (1.5B) + LoRA, mismo presupuesto de steps.
+# Añadidos tras la investigación (investigacion_papers.txt), en orden de prioridad:
+# Abat   ventaja = (r - media del grupo) / std de todo el lote (Lite PPO, arXiv 2508.08221; misma motivación que
+#        Dr. GRPO, arXiv 2503.20783). Con nuestro reward de crédito parcial, un grupo donde todo falla con rewards casi
+#        iguales (0.05 / 0.17) tiene std pequeña y dividir por ella amplifica diferencias de "un test más" hasta el
+#        mismo peso que resolver o no. Se usa la std del lote y no `mean` (Dr. GRPO puro) para no cambiar la escala de
+#        la ventaja: con `mean` sería ~3-10x menor y el término KL pesaría relativamente más (dos cambios a la vez).
+# lr5    LoRA Without Regret (Thinking Machines, 2025): el lr óptimo de LoRA en RL es alto; tercer punto de la curva
+#        1e-5 (A) / 2e-5 (A_lr2) / 5e-5.
+# BIN    reward binario (sólo "resuelto", estilo RLVR de Tülu 3) frente al crédito parcial.
+# RND    control de reward espurio (arXiv 2506.10947: en modelos Qwen, rewards aleatorios llegan a "mejorar"): mismas
+#        ventajas pero de un reward Bernoulli(0.5). Si RND también sube, la mejora de los demás no viene de los tests.
+# Destilación (training/distill.py), añadida si la base 1.5B (brazo C) es claramente mejor que la 0.5B en val
+# (regla fijada antes de verlo: Δpass@1 >= 0,10 pareado con p < 0,05). Los checkpoints los crean trabajos aparte:
+#   train.py distill --teacher Qwen/Qwen2.5-Coder-1.5B-Instruct --run runs/distill/kd15   (profesor 1.5B)
+#   train.py distill --run runs/distill/rft05                                             (profesor = el propio 0.5B)
+# KD     sólo SFT con soluciones del 1.5B que pasan los tests de train (sin RL): ¿aprende lo que no sabía? (pass@16)
+# RFT    control de KD: lo mismo con soluciones del propio 0.5B (sólo refuerza lo que ya acierta)
+# KD_RL  KD + 40 steps de GRPO con la config de A_lr2: ¿se suman? (compararlo con A_lr2 y con KD)
+name: main
+common:
+  grpo: {max_steps: 40}
+  checkpoint: {every_steps: 10, eval_every_steps: 20, keep_last: 2}
+  eval: {during_train: [val], during_train_n: 8, select_best: val}
+final_eval: {splits: [val], n: 16, checkpoint: last}
+arms:
+  A: {}
+  U2: {grpo: {updates_per_batch: 2}}
+  A_lr2: {grpo: {lr: 2.0e-5}}
+  B: {growth: {enabled: true, schedule: [{step: 0, new_layers: 2}, {step: 20, new_layers: 2}]}}
+  C: {model: Qwen/Qwen2.5-Coder-1.5B-Instruct}
+  Abat: {grpo: {adv_norm: batch}}
+  lr5: {grpo: {lr: 5.0e-5}}
+  DS: {grpo: {dynamic_sampling: true}}   # su motivación resultó más débil de lo previsto (ver arriba)
+  BIN: {reward_weights: {compile: 0.0, visible: 0.0, hidden: 0.0, generated: 0.0, solved: 1.0}}
+  RND: {reward: {control: random}}
+  KD: {eval_checkpoint: runs/distill/kd15}
+  RFT: {eval_checkpoint: runs/distill/rft05}
+  KD_RL: {init_from: runs/distill/kd15, grpo: {lr: 2.0e-5}}

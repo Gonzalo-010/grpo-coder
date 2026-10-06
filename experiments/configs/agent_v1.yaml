@@ -1,0 +1,4 @@
+# Agente como antes de v3 (para A/B con `python agent.py --bench N --config experiments/configs/agent_v1.yaml`):
+# sin vuelta atrás cuando una edición empeora los tests y sin parada por paciencia.
+extends: ../../config.yaml
+agent: {rollback: false, patience: 0}

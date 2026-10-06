@@ -1,0 +1,4 @@
+# Prueba corta de phase2 para validar en GPU: hereda todo de config.yaml y sólo acorta el run.
+extends: config.yaml
+grpo: {max_steps: 8}
+checkpoint: {every_steps: 2, eval_every_steps: 2}

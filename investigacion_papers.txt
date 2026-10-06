@@ -1,0 +1,486 @@
+INVESTIGACIÓN: PAPERS Y FUENTES CON IMPLEMENTACIONES APLICABLES A ESTE PROYECTO
+====================================================================================================
+Proyecto: Qwen2.5-Coder-0.5B-Instruct + GRPO + LoRA, RTX 5070 12 GB, WSL2, sandbox bwrap, ~100 problemas de train.
+Fecha: 2026-10-03. Enlaces comprobados ese día (arXiv / páginas oficiales).
+
+CÓMO LEERLO
+- Cada entrada: QUÉ propone · POR QUÉ encaja (o no) aquí · CÓMO se haría en el código actual · COSTE/RIESGO ·
+  CÓMO MEDIRLO con la infraestructura que ya existe (experiments/plans/*.yaml + informe pareado).
+- Prioridad: [P1] valor esperado alto y barato · [P2] valor probable, coste medio · [P3] interesante pero caro
+  o dudoso con 0.5B y 12 GB.
+- [YA] = lo que el proyecto ya hace igual o parecido (para no reimplementarlo).
+- Los resúmenes son míos; antes de implementar algo conviene leer el original (detalles, hiperparámetros).
+- Aviso general: casi todos estos resultados se obtuvieron con modelos de 1.5B-32B y miles o cientos de miles de
+  problemas. Con 0.5B y ~100 problemas pueden no transferir. Nada de esto se activa "porque lo dice un paper": cada
+  idea va con su brazo de experimento y se compara pareado contra el baseline.
+
+LO QUE YA HEMOS MEDIDO (sirve para priorizar)
+- Brazo A (config actual, 40 steps x 48 rollouts): val pass@1 0.194 -> 0.233 (+0.039; 15 problemas mejoran, 8
+  empeoran; test de signos p = 0.21: aún no significativo). pass@10 y pass@16 NO cambian. KL a la referencia
+  ~0.0002 -> ~0.008.
+- Con el reward de crédito parcial sólo ~13 % de los grupos GRPO tienen varianza 0 (aunque el 53 % de los problemas
+  de train salen 0/8 en el modelo base: fallar todos no implica el mismo reward).
+- Tiempo por step ~20 s: generación ~60 %, espera del sandbox ~20 % (timeouts de código generado), backward ~10 %.
+- El resultado completo (U2, A_lr2, DS, crecimiento B, modelo 1.5B C) va en el informe final.
+
+
+====================================================================================================
+1. ALGORITMO DE RL (GRPO Y VARIANTES)
+====================================================================================================
+
+1.1 DeepSeekMath: GRPO  [YA]
+    https://arxiv.org/abs/2402.03300
+    Qué: PPO sin crítico; la ventaja de cada respuesta es su reward normalizado dentro del grupo de G respuestas al
+    mismo prompt; KL contra la referencia (estimador k3) en la pérdida.
+    Aquí: es exactamente training/grpo.py (G = num_rollouts = 8, KL k3 con kl_coef 0.04, clip 0.2).
+
+1.2 DAPO: An Open-Source LLM RL System at Scale (ByteDance Seed / Tsinghua, 2025)  [P1 parcial]
+    https://arxiv.org/abs/2503.14476
+    Qué: cuatro cambios sobre GRPO: (a) Clip-Higher: límite superior del clip mayor que el inferior (p. ej. 0.28 vs
+    0.2) para no frenar tokens poco probables que mejoran -> menos colapso de entropía; (b) Dynamic Sampling: descartar
+    grupos con todo bien o todo mal y rellenar con otros; (c) pérdida token-level (cada token pesa igual en el lote);
+    (d) Overlong reward shaping / filtrado de respuestas truncadas. Sin término KL.
+    Aquí: (b) = brazo DS del experimento [YA]; (c) = nuestra pérdida token-mean sobre el lote completo [YA];
+    (d) no aporta: el truncado aquí es ~0.4 %. (a) sólo actúa si updates_per_batch > 1 (con U=1 el ratio es 1).
+    Cómo: grpo.clip_eps_high en training/grpo.py:grpo_loss (una línea: clamp(ratio, 1-eps, 1+eps_high)).
+    Medir: brazo {grpo: {updates_per_batch: 2, clip_eps_high: 0.28}} contra U2. Mirar entropía y clip_frac.
+
+1.3 Dr. GRPO: Understanding R1-Zero-Like Training: A Critical Perspective (Sea AI Lab, 2025)  [P1]
+    https://arxiv.org/abs/2503.20783
+    Qué: GRPO tiene dos sesgos: dividir por la longitud de cada respuesta (favorece respuestas largas cuando el
+    reward es malo) y dividir la ventaja por la desviación típica del grupo (pondera más los problemas casi resueltos
+    o casi imposibles). Propone quitar ambos (ventaja = r - media; normalizador constante).
+    Aquí: no dividimos por la longitud de cada respuesta (token-mean sobre el lote) [YA en parte]; la división por
+    la std sí la hacemos por defecto. La alternativa ya existe: grpo.adv_norm: mean.
+    Medir: brazo {grpo: {adv_norm: mean}}. Barato: misma velocidad, sólo cambia la ventaja.
+
+1.4 RLOO: Back to Basics: Revisiting REINFORCE Style Optimization (Cohere, 2024)  [P2]
+    https://arxiv.org/abs/2402.14740
+    Qué: REINFORCE con baseline leave-one-out (ventaja = r_i - media de las OTRAS respuestas del grupo); argumenta
+    que las piezas de PPO sobran en LLMs.
+    Aquí: equivale a adv_norm: mean escalado por G/(G-1); sólo merece la pena si 1.3 gana.
+
+1.5 GSPO: Group Sequence Policy Optimization (Qwen, 2025)  [P3]
+    https://arxiv.org/abs/2507.18071
+    Qué: ratio de importancia y clip a nivel de SECUENCIA (normalizado por longitud) en vez de por token; más
+    estable con varias actualizaciones por lote y con MoE.
+    Aquí: con U=1 el ratio es 1 y da igual. Sólo relevante si U=2 resulta útil.
+
+1.6 The Entropy Mechanism of RL for Reasoning LMs (2025)  [P2: vigilar]
+    https://arxiv.org/abs/2505.22617   código: https://github.com/PRIME-RL/Entropy-Mechanism-of-RL
+    Qué: la entropía de la política cae deprisa al principio del RL y el rendimiento se estanca cuando se agota;
+    la caída la produce la covarianza entre log-prob y ventaja; proponen Clip-Cov / KL-Cov (limitar la
+    actualización de los pocos tokens con covarianza alta).
+    Aquí: ya registramos la entropía por step (~0.15 nats/token al inicio). En el entrenamiento largo, si la
+    entropía cae y val se estanca, esta es la primera intervención a probar.
+
+1.7 Does RL Really Incentivize Reasoning Capacity Beyond the Base Model? (Tsinghua, 2025)  [P1: para interpretar]
+    https://arxiv.org/abs/2504.13837
+    Qué: el RL con recompensas verificables sube pass@1 pero con k grande el modelo base iguala o supera al
+    entrenado: el RL concentra la probabilidad en soluciones que el base ya podía muestrear; no añade capacidades.
+    Aquí: es lo que vemos en A (pass@1 sube, pass@16 igual). Consecuencias prácticas: medir siempre pass@1 Y pass@k
+    alto (ya lo hacemos hasta 16); no esperar que el RL resuelva problemas que el base nunca resuelve; para
+    capacidades nuevas hace falta otra fuente (más datos, destilación desde un modelo mayor, modelo mayor).
+
+1.8 ProRL: Prolonged RL Expands Reasoning Boundaries (NVIDIA, 2025)  [P2: para el entrenamiento largo]
+    https://arxiv.org/abs/2505.24864
+    Qué: contrapunto a 1.7: con RL MUY prolongado (miles de steps), control del KL, reinicios periódicos de la
+    política de referencia y tareas diversas, un modelo de 1.5B sí amplía pass@k más allá del base.
+    Aquí: el "reinicio de referencia" se puede hacer con LoRA: cada N steps, fusionar LoRA en los pesos base
+    (nueva referencia), reiniciar LoRA y el estado del optimizador. Encaja con el run de 300 steps si el KL crece
+    hasta frenar el aprendizaje.
+
+1.9 Pass@k Training for Balancing Exploration and Exploitation (2025)  [P3]
+    https://arxiv.org/abs/2508.10751
+    Qué: usar pass@k del grupo como recompensa para no perder exploración; ventajas analíticas.
+    Aquí: interesante si el entrenamiento largo reduce pass@16 (colapso de diversidad). Hoy no pasa.
+
+1.10 Tülu 3 (AI2, 2024): RLVR  [P2]
+    https://arxiv.org/abs/2411.15124
+    Qué: "RL con recompensas verificables": reward binario (correcto/incorrecto) tras SFT + DPO.
+    Aquí: nuestro reward da crédito parcial (compila 0.05, visibles 0.1, ocultos 0.25, generados 0.2, resuelto 0.4).
+    El crédito parcial da señal en problemas difíciles pero puede premiar casi-soluciones. Comparar con un brazo de
+    reward binario (sólo "resuelto") es barato y responde una pregunta real del diseño.
+
+
+====================================================================================================
+2. CURRÍCULO Y SELECCIÓN DE PROBLEMAS
+====================================================================================================
+
+2.1 LILO: Learning to Reason at the Frontier of Learnability (Foster & Foerster, NeurIPS 2025)  [P1]
+    https://arxiv.org/abs/2502.12272
+    Qué: muestrear los problemas con mayor varianza de acierto p(1-p): son los que más gradiente dan.
+    Aquí: train.py improve ya muestrea por aprendibilidad (hard mining con p(1-p)) [YA]. Nunca se ha comparado con
+    phase2 en condiciones iguales. Medir: brazo que use el modo improve contra A (hay que permitir el modo en el plan).
+
+2.2 Online Difficulty Filtering for Reasoning Oriented RL (2025)  [P2]
+    https://arxiv.org/abs/2504.03380
+    Qué: filtrar el lote para quedarse con problemas de dificultad intermedia (tasa de acierto ni 0 ni 1), con
+    justificación teórica de que maximiza la señal útil.
+    Aquí: parecido al brazo DS y a 2.1. Con nuestro reward parcial, "dificultad" debería medirse con la tasa de
+    "resuelto", no con la varianza del reward.
+
+
+====================================================================================================
+3. RL ESPECÍFICO PARA CÓDIGO
+====================================================================================================
+
+3.1 RLEF: Grounding Code LLMs in Execution Feedback with RL (Meta, ICML 2025)  [P2: alto potencial]
+    https://arxiv.org/abs/2410.02089
+    Qué: el episodio de RL es multi-turno: el modelo genera, recibe el resultado de los tests visibles, corrige,
+    y el reward se da al final; así aprende a USAR el feedback, no sólo a acertar a la primera.
+    Aquí: es justo el producto (Generate -> Test -> Fix). Hoy el fix y los "grupos de reparación" de improve son
+    piezas sueltas. Cómo: episodio = hasta 3 turnos (rollouts/fix.py ya produce el feedback), GRPO sobre el
+    episodio completo, reward = tests ocultos del último intento. Coste: 2-3x generación por episodio.
+    Medir: tasa de arreglo en `train.py fix --compare` y pass@1 tras k intentos, pareado contra A.
+
+3.2 SCoRe: Training LMs to Self-Correct via RL (Google DeepMind, ICLR 2025)  [P3]
+    https://arxiv.org/abs/2409.12917
+    Qué: RL multi-turno para auto-corrección con datos propios, con un truco de reward para que el modelo no se
+    limite a repetir el primer intento. Complementa 3.1.
+
+3.3 StepCoder (2024)  [P3]
+    https://arxiv.org/abs/2402.01391
+    Qué: currículo partiendo de completar el final del código y optimización que ignora el código que los tests no
+    ejecutan. Pensado para programas largos; nuestros problemas son funciones cortas.
+
+3.4 DeepCoder-14B-Preview (Agentica + Together, 2025)  [P2: receta y datos]
+    https://huggingface.co/agentica-org/DeepCoder-14B-Preview
+    Qué: receta abierta de RL para código: GRPO sin KL ni pérdida de entropía, clip alto, filtrado de respuestas
+    truncadas, alargamiento progresivo del contexto; y sobre todo un dataset filtrado (problemas verificados con
+    suficientes tests, deduplicados).
+    Aquí: el filtrado del dataset coincide con nuestro validador [YA]. Lo útil: quitar el KL es un brazo barato
+    ({grpo: {kl_coef: 0}}), aunque con 0.5B y pocos datos el KL protege de deriva; medir antes de adoptarlo.
+
+3.5 Code-R1: Reproducing R1 for Code with Reliable Rewards  [P1: lista de comprobación]
+    https://github.com/ganler/code-r1
+    Qué: reproducción abierta de RL para código cuya lección principal es que los tests malos (que aceptan
+    soluciones erróneas o rechazan correctas) arruinan el entrenamiento; sandbox fiable.
+    Aquí: nuestro validador (mutation score >= 0.8, baseline <= 60 %, determinismo, fugas, O(n^2)) es esa lección
+    [YA]. Mantenerlo obligatorio para cualquier problema nuevo.
+
+3.6 AceCoder: Acing Coder RL via Automated Test-Case Synthesis (TIGER Lab, 2025)  [P2: escalar datos]
+    https://arxiv.org/abs/2502.01718   código: https://github.com/TIGER-AI-Lab/AceCoder
+    Qué: sintetizar casos de test a gran escala con un LLM para tener recompensas en muchos problemas; RL con
+    tasa de tests superados.
+    Aquí: es la vía para pasar de 100 a miles de problemas de train sin escribirlos a mano: un modelo mayor (o una
+    API) propone enunciado + solución + tests, y nuestro validador decide qué entra.
+
+3.7 KodCode: A Diverse, Challenging, and Verifiable Synthetic Dataset for Coding (2025)  [P1: datos]
+    https://arxiv.org/abs/2503.02951   código/datos: https://github.com/KodCode-AI/kodcode
+    Qué: dataset sintético de tripletas (problema, solución, tests) verificadas por ejecución, con varios niveles
+    de dificultad.
+    Aquí: fuente directa para escalar train a miles de problemas de nivel función. Cómo: importador a nuestro
+    formato (problems/catalog) + validate.py + calibración; val y test se quedan fijos para poder comparar.
+    Revisar la licencia antes de usarlo.
+
+
+====================================================================================================
+4. EVALUACIÓN
+====================================================================================================
+
+4.1 Codex: Evaluating LLMs Trained on Code (OpenAI, 2021)  [YA]
+    https://arxiv.org/abs/2107.03374
+    Qué: HumanEval y el estimador insesgado de pass@k con n muestras. Es el que usamos.
+
+4.2 Adding Error Bars to Evals (Evan Miller, 2024)  [P1]
+    https://arxiv.org/abs/2411.00640
+    Qué: errores estándar en evaluaciones de LLMs: diferencias PAREADAS sobre las mismas preguntas, errores
+    agrupados, reducir varianza con varias muestras por pregunta y análisis de potencia (cuántas preguntas hacen
+    falta para detectar una mejora dada).
+    Aquí: el diseño pareado + test de signos ya va en esta línea [YA]. Falta el análisis de potencia: con 50
+    problemas de val, ¿qué mejora mínima podemos detectar? Añadirlo al informe evita perseguir ruido.
+
+4.3 EvalPlus: Is Your Code Generated by ChatGPT Really Correct? (NeurIPS 2023)  [P1]
+    https://arxiv.org/abs/2305.01210
+    Qué: HumanEval+ / MBPP+: muchos más tests por problema (generados con un LLM + mutación de entradas por tipo);
+    revelan que los pass@k originales estaban inflados.
+    Aquí: (a) nuestro generador de casos + mutation score es la misma idea [YA]; (b) MBPP+/HumanEval+ servirían como
+    benchmark EXTERNO para comprobar que lo aprendido transfiere fuera de nuestro dataset (las tareas de MBPP son
+    de nivel parecido). Cómo: importador a un split "ext" que nunca entra en train.
+
+4.4 LiveCodeBench (ICLR 2025)  [P3]
+    https://arxiv.org/abs/2403.07974
+    Qué: problemas de concursos con fecha, para evaluar sólo con problemas posteriores al corte del modelo (sin
+    contaminación); escenarios de auto-reparación y predicción de salida.
+    Aquí: demasiado difícil para 0.5B en generación; el escenario de "self-repair" es interesante para el agente.
+
+
+====================================================================================================
+5. CRECIMIENTO DEL MODELO
+====================================================================================================
+
+5.1 LLaMA Pro: Progressive LLaMA with Block Expansion (2024)  [YA]
+    https://arxiv.org/abs/2401.02415
+    Qué: insertar bloques Transformer copiados con la proyección de salida a cero (el modelo no cambia al crecer) y
+    entrenar sólo los nuevos con datos de un dominio nuevo; conserva lo que el modelo ya sabía.
+    Aquí: es lo implementado en model/growth.py (más LoRA en las capas originales). El brazo B lo mide.
+
+5.2 Net2Net (ICLR 2016)  [YA, la idea]
+    https://arxiv.org/abs/1511.05641
+    Qué: transformaciones que preservan la función para crecer en anchura y profundidad.
+    Aquí: la profundidad se hace así; la anchura la descarté (rompe las dimensiones de cabeza, RoPE y LoRA).
+
+5.3 SOLAR 10.7B: Depth Up-Scaling (Upstage, 2023)  [P3]
+    https://arxiv.org/abs/2312.15166
+    Qué: duplicar capas de un modelo y continuar el preentrenamiento para recuperar y superar la calidad.
+
+5.4 Stacking Your Transformers (NeurIPS 2024)  [P3]
+    https://arxiv.org/abs/2405.15319
+    Qué: crecer apilando capas acelera el PREENTRENAMIENTO cuando hay muchos tokens de entrenamiento por delante.
+
+    Conclusión de la sección: las ganancias de crecer aparecen con mucho entrenamiento posterior (miles de millones
+    de tokens). Con ~100 problemas y 40-300 steps de RL, la capacidad extra probablemente no es el cuello de
+    botella: el brazo B lo comprueba con datos, y si no gana, no merece su coste.
+
+
+====================================================================================================
+6. EFICIENCIA EN UNA GPU DE 12 GB
+====================================================================================================
+
+6.1 vLLM: PagedAttention (SOSP 2023)  [P1 en velocidad, P2 en coste de integración]
+    https://arxiv.org/abs/2309.06180
+    Qué: motor de inferencia con KV-cache paginada y batching continuo; mucho más rendimiento que generate() de HF.
+    Aquí: la generación es ~60 % del step, así que es la mayor ganancia de velocidad posible. TRL lo integra en modo
+    "colocate" (vLLM en el mismo proceso, compartiendo GPU y sincronizando pesos cada step). Riesgos: reparto de
+    los 12 GB entre vLLM y el backward, compatibilidad en WSL, sincronizar pesos LoRA y bloques crecidos.
+    Medir: tokens/s y s/step con el mismo brazo A; el resultado de calidad debe ser estadísticamente igual.
+
+6.2 Liger Kernel (LinkedIn, 2024)  [P3]
+    https://arxiv.org/abs/2410.10989
+    Qué: kernels Triton (fused linear cross-entropy, RMSNorm, RoPE...) y pérdidas calculadas por trozos.
+    Aquí: la idea principal (no materializar los logits del vocabulario) ya está en training/logprob.py [YA];
+    Liger lo haría más rápido, no con menos memoria.
+
+6.3 QLoRA (NeurIPS 2023)  [P2: si el modelo 1.5B gana]
+    https://arxiv.org/abs/2305.14314
+    Qué: LoRA sobre un modelo base cuantizado a 4 bits (NF4).
+    Aquí: permitiría 1.5B-3B con margen en 12 GB. Contra: la generación con pesos de 4 bits es más lenta, y en RL la
+    generación domina el tiempo.
+
+6.4 LoRA Without Regret (Thinking Machines, 2025)  [P1]
+    https://thinkingmachines.ai/blog/lora/
+    Qué: en RL, LoRA (incluso de rango muy bajo) iguala al fine-tuning completo, porque cada episodio aporta muy
+    pocos bits de información; el learning rate óptimo de LoRA es ~10 veces el del fine-tuning completo; aplicar
+    LoRA a todas las capas (las MLP importan más que la atención).
+    Aquí: ya usamos LoRA r=32 en todas las capas lineales [YA]. Lo accionable es el learning rate: 1e-5 puede ser
+    bajo para LoRA. El brazo A_lr2 (2e-5) da una primera pista; el siguiente experimento barato es un barrido
+    {1e-5, 3e-5, 1e-4} vigilando KL y entropía.
+    Implementación de referencia en TRL: https://huggingface.co/docs/trl/main/en/lora_without_regret
+
+6.5 Unsloth (documentación de RL/GRPO)  [P3]
+    https://unsloth.ai/docs/get-started/reinforcement-learning-rl-guide/advanced-rl-documentation
+    Qué: GRPO con LoRA y vLLM optimizado para poca VRAM. Sus cifras de ahorro de memoria son del propio proveedor:
+    verificar antes de confiar en ellas. Útil como referencia de trucos de memoria.
+
+
+====================================================================================================
+7. FRAMEWORKS DE REFERENCIA (para contrastar nuestra implementación, no para sustituirla)
+====================================================================================================
+
+7.1 TRL GRPOTrainer (Hugging Face)
+    https://huggingface.co/docs/trl/main/en/grpo_trainer   índice de papers: https://huggingface.co/docs/trl/main/en/paper_index
+    Tiene como opciones casi todo lo de la sección 1: tipos de pérdida (grpo, dr_grpo, dapo...), num_iterations
+    (= nuestro updates_per_batch), epsilon_high (Clip-Higher), ratio a nivel de secuencia (GSPO), vLLM colocate.
+    Uso: comprobar que nuestras variantes calculan lo mismo que una implementación revisada por mucha gente.
+
+7.2 verl / HybridFlow (ByteDance)
+    https://arxiv.org/abs/2409.19256
+    Framework de RL a gran escala (varias GPUs). Para una sola GPU de 12 GB es excesivo; útil para leer cómo
+    implementan DAPO, Dr. GRPO, etc.
+
+
+====================================================================================================
+8. AGENTE (Generate -> Test -> Analyze -> Fix -> Retest)
+====================================================================================================
+
+8.1 Agentless (2024)  [P1]
+    https://arxiv.org/abs/2407.01489
+    Qué: una tubería simple (localizar -> generar varios parches -> validarlos con tests) iguala o supera a agentes
+    complejos con mucho menos coste.
+    Aquí: agent.candidates: k ya genera k propuestas y aplica la que más tests pasa [YA]. Falta medirlo:
+    `python agent.py --bench 20` con candidates 1 vs 4 (pareado por repo, la semilla por repo ya está).
+
+8.2 Teaching LLMs to Self-Debug (Google, ICLR 2024)  [P2]
+    https://arxiv.org/abs/2304.05128
+    Qué: que el modelo explique su código línea a línea ("rubber duck") y use el resultado de la ejecución mejora
+    la corrección, incluso sin tests.
+    Aquí: un formato de prompt "explica y corrige" para fix/agente; se mide con `train.py fix --compare`.
+
+8.3 Reflexion (NeurIPS 2023)  [YA en parte]
+    https://arxiv.org/abs/2303.11366
+    Qué: memoria verbal de los fallos entre intentos. El agente ya guarda memoria de ediciones y firmas de error.
+
+8.4 CodeT: Code Generation with Generated Tests (Microsoft, ICLR 2023)  [P2]
+    https://arxiv.org/abs/2207.10397
+    Qué: el modelo genera tests además de soluciones y elige la solución con más "acuerdo de ejecución dual".
+    Aquí: elegir entre k candidatos cuando NO hay tests (tareas propias del panel sin asserts, repos sin tests).
+
+8.5 AlphaCodium: From Prompt Engineering to Flow Engineering (CodiumAI, 2024)  [P3]
+    https://arxiv.org/abs/2401.08500
+    Qué: flujo en etapas (reflexionar sobre el problema, generar tests adicionales, iterar contra ellos).
+    Aquí: con 0.5B, las etapas de "razonar sobre el problema" suelen añadir ruido; probar sólo la parte de tests.
+
+
+====================================================================================================
+9. PLAN SUGERIDO (orden por valor esperado / coste)
+====================================================================================================
+Cada punto es un brazo nuevo en experiments/plans/ con la misma evaluación pareada que el experimento actual.
+
+1. [gratis] Interpretar con 1.7 y 1.8: el RL corto afina pass@1; para que el entrenamiento largo valga la pena,
+   vigilar pass@16 y la entropía, no sólo pass@1.
+2. [barato] Learning rate de LoRA (6.4): barrido 1e-5 / 3e-5 / 1e-4.
+3. [barato] Ventaja sin división por la std (1.3, ya implementado: grpo.adv_norm: mean).
+4. [barato] Reward binario vs crédito parcial (1.10).
+5. [medio] Currículo por aprendibilidad (2.1, el modo improve ya existe) contra phase2.
+6. [medio, alto impacto] Más datos de train verificados: importador de KodCode (3.7) o síntesis tipo AceCoder
+   (3.6), siempre pasando por validate.py; val/test fijos. Es la palanca más probable para que val suba de verdad.
+7. [medio] Benchmark externo MBPP+/HumanEval+ (4.3) para medir transferencia.
+8. [alto] vLLM colocate (6.1): la mayor ganancia de velocidad (generación ~60 % del step).
+9. [alto] Episodios multi-turno tipo RLEF (3.1): alinea el entrenamiento con el producto Generate -> Test -> Fix.
+10. [vigilar] Si en el run largo cae la entropía y val se estanca: Clip-Higher (1.2) o Clip-Cov (1.6); si crece
+    el KL y frena el aprendizaje: reinicio de la referencia (1.8).
+
+
+====================================================================================================
+PARTE 2 (2026-10-03, noche): MÁS FUENTES Y DECISIONES TOMADAS CON DATOS
+====================================================================================================
+
+Nuevo dato del experimento: U2 (2 actualizaciones por lote) aprende más rápido en train: reward pareado por step
++0.042 en la 2.ª mitad (18 de 20 steps a favor, p = 0.0004). En val (n=16): pass@1 0.255 vs 0.233 de A (+0.023,
+p = 0.40, no significativo; el efecto mínimo detectable con 50 problemas es ~0.044); greedy 0.36 vs 0.24 (A) y 0.22
+(base; +0.14 vs base, 7 a 0, p = 0.016). pass@16 igual en base, A y U2 (0.50-0.52): otra vez "afinar, no ampliar".
+La entropía de U2 baja (0.152 -> 0.127) y la de A no (0.154 -> 0.170).
+
+10.1 Tricks or Traps? A Deep Dive into RL for LLM Reasoning ("Lite PPO", ICLR 2026)  [IMPLEMENTADO + brazo]
+     https://arxiv.org/abs/2508.08221
+     Qué: estudio sistemático de los "trucos" de RL. Conclusiones útiles aquí: (1) normalizar la ventaja con la
+     media del GRUPO y la desviación típica del LOTE es lo más robusto: la std del lote evita amplificar en exceso
+     grupos con rewards muy concentrados (justo nuestro caso con crédito parcial: grupos que fallan todos con
+     0.05 / 0.17); (2) pérdida token-level (la nuestra) mejor en modelos base, poco efecto en Instruct; (3) Clip-Higher
+     ayuda en modelos fuertes, poco en pequeños.
+     Hecho: grpo.adv_norm: batch (training/grpo.py) + test + brazo "Abat" en experiments/plans/main.yaml.
+     Por qué Abat y no Dr. GRPO puro (adv_norm: mean): con `mean` la ventaja sería ~3-10x menor y el término KL, que
+     no se escala, pesaría relativamente más: dos cambios a la vez. Abat cambia sólo el sesgo por grupo.
+
+10.2 Spurious Rewards: Rethinking Training Signals in RLVR (2025, ICML 2026)  [IMPLEMENTADO + brazo]
+     https://arxiv.org/abs/2506.10947
+     Qué: en modelos Qwen, el RL con rewards ALEATORIOS sube mucho las métricas (Qwen2.5-Math-7B: +21 puntos en
+     MATH-500 frente a +29 con el reward real); en Llama/OLMo no. Mecanismo: el sesgo del clipping de GRPO amplifica
+     comportamientos que el modelo ya tenía. Recomiendan controles con reward aleatorio y probar otras familias.
+     Por qué importa aquí: usamos Qwen2.5-Coder, y U2 activa el clip. Sin este control no podemos afirmar que la
+     mejora venga de aprender de los tests.
+     Hecho: reward.control: random (training/loop.py: ventajas de un Bernoulli(0.5) con RNG propio, sin tocar los
+     rewards reales, que se siguen registrando) + test + brazo "RND".
+
+10.3 On-Policy Distillation (Thinking Machines, 2025) y GKD (Agarwal et al., ICLR 2024)  [P1 condicional]
+     https://thinkingmachines.ai/blog/on-policy-distillation/   https://arxiv.org/abs/2306.13649
+     Qué: el alumno genera; un profesor fijo puntúa CADA token (log-prob); la ventaja por token es la reverse-KL
+     (logp_profesor - logp_alumno). Señal densa (bits por token, no un bit por episodio): informan de 50-100x
+     menos cómputo que RL para llegar al mismo nivel.
+     Por qué importa aquí: es la respuesta directa a lo que medimos (el RL afina pero pass@16 no se mueve). Un
+     profesor de la misma familia (Qwen2.5-Coder-1.5B, mismo tokenizer) cabe en la RTX 5070 junto al alumno 0.5B.
+     Condición antes de implementarlo: que el 1.5B base sea claramente mejor que el 0.5B en NUESTRO val (lo mide el
+     brazo C esta noche). Si lo es: per-token advantages en training/grpo.py (hoy son por secuencia), carga del
+     profesor sin gradiente y mezcla opcional con el reward de tests. ~1 día de trabajo + tests.
+
+10.4 ReST-EM: Beyond Human Data: Scaling Self-Training (Google DeepMind, 2023) y STaR (NeurIPS 2022)  [P2]
+     https://arxiv.org/abs/2312.06585   https://arxiv.org/abs/2203.14465
+     Qué: "expert iteration": generar muchas soluciones, quedarse con las que pasan los tests y hacer SFT con ellas;
+     repetir. En código, ReST-EM superó al fine-tuning con datos humanos.
+     Aquí: línea base barata y estable frente a GRPO (sin ventajas ni KL). Con pass@16 = 0.5 en val, para la mitad
+     de los problemas hay soluciones correctas que reforzar. Encaja con el pipeline actual (generar + puntuar ya
+     existe; falta un paso de SFT).
+
+10.5 1-shot RLVR: RL for Reasoning with One Training Example (2025)  [P3: interpretar]
+     https://arxiv.org/abs/2504.20571
+     Qué: un único problema de entrenamiento basta para subir mucho las métricas (Qwen2.5-Math-1.5B en MATH500:
+     36 % -> 73.6 %); la pérdida de entropía ayuda a explorar; la mejora en test sigue aun cuando train está saturado.
+     Aquí: otra razón para controles (10.2): con modelos Qwen, "mejora tras pocos pasos" no implica aprender la tarea.
+
+10.6 CURE: Co-Evolving LLM Coder and Unit Tester via RL (NeurIPS 2025)  [P3]
+     https://arxiv.org/abs/2506.03136
+     Qué: el mismo modelo aprende a escribir código y tests; los tests se premian por distinguir código bueno de
+     malo; no necesita código de referencia, sólo tests reales. Mejora Best-of-N con tests propios.
+     Aquí: útil para el agente/panel (tareas sin tests) y para seleccionar entre k candidatos, pero los resultados
+     son con 7B-14B; con 0.5B probablemente los tests generados serán malos.
+
+10.7 Absolute Zero: Reinforced Self-play Reasoning with Zero Data (2025)  [P3]
+     https://arxiv.org/abs/2505.03335
+     Qué: el modelo propone sus propias tareas de código, las verifica con el ejecutor y aprende a resolverlas.
+     Aquí: sería la forma de generar datos sin límite, pero con 0.5B el proponente sería muy débil.
+
+10.8 S*: Test Time Scaling for Code Generation (2025)  [P2: producto]
+     https://arxiv.org/abs/2502.14382
+     Qué: generar varias soluciones en paralelo, depurarlas con feedback de ejecución y elegir entre ellas
+     generando entradas que las distingan; con eso un modelo de 3B supera a GPT-4o-mini.
+     Aquí: no cambia el entrenamiento sino el uso (fix/agente/panel). Nuestro pass@16 = 0.50 frente a pass@1 = 0.23
+     dice que hay mucho que ganar eligiendo bien entre muestras. Pieza que falta: el selector (generar entradas que
+     separen candidatos y elegir por acuerdo, tipo CodeT).
+
+10.9 SimpleRL-Zoo (2025)  [P3]
+     https://arxiv.org/abs/2503.18892
+     Qué: RL "desde cero" en 10 modelos base de familias y tamaños distintos (incluido Qwen2.5-0.5B); lo que más
+     importa es ajustar la recompensa de formato y la dificultad de los datos a cada modelo.
+     Aquí: nuestra calibración por problema ya da la dificultad para el modelo; el formato lo resuelve el prefill.
+
+
+DECISIONES (qué se implementa y qué no, con el porqué)
+- Implementado y en cola esta noche (brazos en experiments/plans/main.yaml, misma evaluación pareada):
+  Abat (Lite PPO, 10.1), lr5 (LoRA Without Regret, 6.4), BIN (reward binario, 1.10), RND (control espurio, 10.2).
+  Más el informe con "efecto mínimo detectable" (MDE80, de 4.2): con 50 problemas de val, por debajo de ~0.04-0.06
+  de pass@1 una diferencia no se puede distinguir del ruido.
+- NO implementado, con datos: Clip-Higher (1.2). En U2 el clip sólo actúa en el 0.06 % de los tokens; ampliar el
+  límite superior cambiaría ese 0.06 %. Sólo tendría sentido con lr o U mucho mayores.
+- NO implementado todavía, condicionado a resultados: destilación on-policy (10.3; depende de que el 1.5B sea
+  mejor en nuestro val), currículo LILO (2.1; necesita que el plan admita el modo improve), reinicio de referencia
+  (1.8; el KL tras 40 steps es ~0.008, lejos de frenar nada).
+- NO ahora por coste/riesgo: vLLM (6.1; en RTX 50 y WSL hace falta una versión con kernels sm_120 y el reparto de los
+  12 GB con el backward es delicado), RLEF multi-turno (3.1), importar KodCode (3.7; licencia CC BY-NC 4.0: vale
+  para uso personal no comercial; sus tests son fijos en formato pytest, distinto de nuestros generadores, así que
+  hace falta un tipo de problema nuevo).
+
+¿HACE FALTA SEGUIR BUSCANDO?
+- Para decidir lo de esta noche, no: las dudas que quedan son empíricas y las responden los brazos en cola.
+- Sí, pero más adelante y de forma dirigida, para dos decisiones concretas: (a) si C demuestra margen del 1.5B,
+  detalles de implementación de la destilación on-policy (pérdida exacta, mezcla con el reward de tests, profesor
+  en 4 bits si hiciera falta un 7B); (b) si se quiere más velocidad, el estado exacto de vLLM con sm_120 en WSL.
+
+
+====================================================================================================
+PARTE 3: BÚSQUEDA DIRIGIDA PARA LAS DOS DECISIONES PENDIENTES
+====================================================================================================
+
+A) Destilación on-policy: cómo se haría aquí
+   Referencia de implementación: TRL GKDTrainer (https://huggingface.co/docs/trl/gkd_trainer)
+   - Su ejemplo usa exactamente nuestra escala: alumno Qwen 0.5B-Instruct, profesor Qwen 1.5B-Instruct (mismo
+     tokenizer, requisito para comparar log-probs token a token).
+   - Parámetros: lmbda = fracción de datos generados por el alumno (1.0 = totalmente on-policy; el paper GKD
+     encuentra que on-policy funciona mejor); beta interpola la divergencia (0 = KL directa, 1 = KL inversa).
+   Diseño propuesto para este proyecto (sin TRL, reutilizando nuestro bucle):
+   1. Rollouts del alumno como ahora (mismos problemas, misma semilla por step).
+   2. Forward del profesor (Qwen2.5-Coder-1.5B, sin gradiente, bf16 ~3 GB) sobre las mismas secuencias, con
+      training/logprob.py (sólo tokens de respuesta, cabeza por trozos): logp_T por token.
+   3. Ventaja por token = (logp_T - logp_alumno).detach() (KL inversa muestreada, sin descuento), opcionalmente
+      + ventaja de GRPO de los tests: A_t = A_grpo + lambda_kd * (logp_T - logp_S). Requiere ventajas por token en
+      training/grpo.py (hoy son por secuencia): cambio contenido, con test de equivalencia (lambda_kd = 0 => GRPO).
+   4. Memoria: profesor 3 GB + alumno en training ~7-8 GB pico => justo en 12 GB; si no cabe, profesor en 8 bits
+      o calcular logp_T antes del backward y liberar.
+   5. Medir: brazo KD (lambda_kd > 0) contra A, mismo presupuesto de steps; mirar pass@16 (lo que el RL no mueve).
+   Condición (sin cambios): que el brazo C muestre que el 1.5B es claramente mejor que el 0.5B en nuestro val.
+
+B) vLLM en la RTX 5070 bajo WSL: estado (foro oficial de vLLM, 2025)
+   https://discuss.vllm.ai/t/vllm-on-rtx5090-working-gpu-setup-with-torch-2-9-0-cu128/1492
+   https://discuss.vllm.ai/t/running-nvfp4-nemotron-model-on-win11-wsl-rtx-5080-5070-ti/2310
+   - En esos informes, las ruedas de PyPI no traían kernels para sm_120 (Blackwell de consumo): hizo falta compilar
+     vLLM desde el código con PyTorch nightly y CUDA 12.8, o usar el contenedor de NVIDIA; en WSL además hubo errores
+     de símbolos CUDA que se resolvieron compilando FlashInfer. Puede haber mejorado desde entonces: comprobarlo
+     con la versión del momento antes de invertir tiempo.
+   - Modo colocate de TRL (https://huggingface.co/blog/vllm-colocate): vLLM y el entrenamiento comparten la GPU
+     por turnos (sleep mode); el propio blog advierte que no es ideal con presupuestos de memoria ajustados, y 12 GB
+     con backward incluido lo es. Las mejoras que publican (1.26-1.73x) son frente a vLLM en servidor aparte, no
+     frente a generate() de HF.
+   Decisión: no ahora. Antes, medir alternativas baratas con el generador actual: con generate() de HF cada lote
+   espera a su secuencia más larga, así que bajar max_new_tokens (hoy 384; el truncado es ~0.4 % y la media de la
+   respuesta ~130 tokens) o agrupar por longitud de prompt puede recortar parte del tiempo de generación sin
+   tocar la calidad; sólo si eso no basta, valorar vLLM.

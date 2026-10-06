@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coding AI local</title>
+<style>
+:root {
+  --paper: #f1f3f6; --panel: #ffffff; --ink: #16202a; --muted: #586675; --line: #d3dae1;
+  --pass: #1c7a54; --fail: #b1382e; --act: #3949b3; --warn: #93600f;
+  --ui: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --code: "Cascadia Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --paper: #13181e; --panel: #1b222a; --ink: #e2e7ec; --muted: #94a2b0; --line: #2d3743;
+          --pass: #4dc28b; --fail: #f07d71; --act: #909eff; --warn: #e1b262; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.5 var(--ui); color: var(--ink); background: var(--paper);
+       display: grid; grid-template-columns: 196px minmax(0, 1fr); min-height: 100vh; }
+nav { border-right: 1px solid var(--line); padding: 22px 12px; }
+nav h1 { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; margin: 0 10px 20px; }
+nav button { display: block; width: 100%; text-align: left; font: inherit; color: inherit; background: none;
+             border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; margin-bottom: 2px; cursor: pointer; }
+nav button:hover { border-color: var(--line); }
+nav button[aria-current="page"] { background: var(--panel); border-color: var(--line); font-weight: 600; }
+main { padding: 18px 30px 64px; max-width: 1120px; }
+.strip { display: flex; flex-wrap: wrap; gap: 8px 26px; font-size: 13.5px; color: var(--muted);
+         padding-bottom: 12px; margin-bottom: 22px; border-bottom: 1px solid var(--line); }
+.strip b { color: var(--ink); font-weight: 600; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--line); margin-right: 6px; }
+.dot.on { background: var(--pass); }
+h2 { font-size: 23px; font-weight: 600; letter-spacing: -0.015em; margin: 0 0 4px; }
+h3 { font-size: 16px; font-weight: 600; margin: 26px 0 6px; }
+.lead { color: var(--muted); margin: 0 0 18px; max-width: 72ch; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+label.inline { display: inline-flex; gap: 8px; align-items: center; color: var(--ink); font-size: 15px; margin-top: 34px; }
+input, select, textarea { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
+                          border-radius: 6px; padding: 7px 9px; width: 100%; }
+input[type="checkbox"] { width: auto; }
+textarea, pre { font-family: var(--code); font-size: 13px; }
+.row { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0 14px; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 18px 0; }
+button.primary, button.quiet { font: inherit; font-weight: 600; border-radius: 6px; padding: 8px 16px; cursor: pointer; }
+button.primary { background: var(--act); color: #fff; border: 1px solid var(--act); }
+button.quiet { background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
+button:disabled { opacity: 0.5; cursor: default; }
+:focus-visible { outline: 2px solid var(--act); outline-offset: 2px; }
+.note { color: var(--muted); font-size: 14px; }
+.err { color: var(--fail); }
+pre { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px;
+      margin: 6px 0; overflow: auto; max-height: 380px; white-space: pre; }
+details > summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+.chain { list-style: none; margin: 16px 0 10px 12px; padding: 0; border-left: 2px solid var(--line); }
+.chain > li { position: relative; padding: 2px 0 18px 26px; }
+.chain > li::before { content: attr(data-n); position: absolute; left: -14px; top: 0; width: 26px; height: 26px;
+                      border-radius: 50%; background: var(--paper); border: 2px solid var(--fail);
+                      font: 600 12px/22px var(--ui); text-align: center; }
+.chain > li.ok::before { border-color: var(--pass); color: var(--pass); }
+.verdict { font-weight: 600; }
+.verdict.ok { color: var(--pass); } .verdict.ko { color: var(--fail); }
+.bar { display: inline-block; width: 120px; height: 6px; border-radius: 3px; background: var(--line);
+       vertical-align: middle; margin: 0 8px; }
+.bar > i { display: block; height: 100%; border-radius: 3px; background: var(--act); }
+.diff .add { color: var(--pass); } .diff .del { color: var(--fail); } .diff .hunk { color: var(--act); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 6px 0 4px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 500; }
+td.num { font-variant-numeric: tabular-nums; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px; margin: 10px 0; }
+.chart { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+.chart .t { display: flex; justify-content: space-between; font-size: 13.5px; }
+.chart svg { display: block; width: 100%; height: 110px; margin-top: 6px; }
+.chart polyline { fill: none; stroke: var(--act); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.chart polyline.s1 { stroke: var(--warn); } .chart polyline.s2 { stroke: var(--pass); }
+.chart polyline.s3 { stroke: var(--fail); } .chart polyline.s4 { stroke: var(--muted); stroke-dasharray: 2 2; }
+.chart .leg i { display: inline-block; width: 10px; height: 3px; margin: 0 4px 2px 8px; vertical-align: middle; }
+@media (max-width: 760px) {
+  body { grid-template-columns: 1fr; }
+  nav { border-right: 0; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 4px; padding: 12px; }
+  nav h1 { width: 100%; margin-bottom: 8px; } nav button { width: auto; }
+  main { padding: 16px; }
+}
+</style>
+</head>
+<body>
+<nav aria-label="Secciones">
+  <h1>Coding AI local</h1>
+  <button data-view="task" aria-current="page">Tarea</button>
+  <button data-view="agent">Agente</button>
+  <button data-view="train">Entrenamiento</button>
+  <button data-view="runs">Checkpoints</button>
+  <button data-view="settings">Ajustes</button>
+</nav>
+<main>
+  <div class="strip" id="strip" aria-live="polite">Conectando…</div>
+
+  <section id="v-task">
+    <h2>Tarea</h2>
+    <p class="lead">El modelo escribe la función, el sandbox la prueba y cada fallo vuelve al modelo con su error,
+      hasta que pasa todos los tests o se acaban las rondas.</p>
+    <div class="row">
+      <div><label for="t-src">Origen</label>
+        <select id="t-src"><option value="catalog">Problema del catálogo</option><option value="free">Tarea propia</option></select></div>
+      <div><label for="t-iters">Rondas de corrección</label><input id="t-iters" type="number" min="0" max="10"></div>
+      <div><label for="t-chains">Intentos independientes</label><input id="t-chains" type="number" min="1" max="8" value="1"></div>
+      <div><label for="t-ckpt">Modelo</label><select id="t-ckpt" class="ckpt"></select></div>
+    </div>
+    <div id="t-catalog">
+      <label for="t-problem">Problema</label><select id="t-problem"></select>
+      <pre id="t-prompt"></pre>
+    </div>
+    <div id="t-free" hidden>
+      <label for="t-sig">Firma</label><input id="t-sig" placeholder="def slugify(text: str) -> str">
+      <label for="t-doc">Qué debe hacer</label><textarea id="t-doc" rows="2"></textarea>
+      <label for="t-tests">Tests, una línea por caso</label>
+      <textarea id="t-tests" rows="4" placeholder="assert slugify('Hola Mundo') == 'hola-mundo'"></textarea>
+    </div>
+    <div class="actions"><button class="primary" id="t-run">Generar y probar</button><span id="t-state" class="note"></span></div>
+    <div id="t-out"></div>
+  </section>
+
+  <section id="v-agent" hidden>
+    <h2>Agente</h2>
+    <p class="lead">Trabaja sobre una copia del proyecto: edita, ejecuta los tests en el sandbox y corrige con su salida.
+      Tu proyecto sólo cambia si aplicas el diff.</p>
+    <label for="a-repo">Ruta del proyecto en WSL</label><input id="a-repo" placeholder="/home/usuario/mi-proyecto">
+    <label for="a-task">Tarea</label><textarea id="a-task" rows="3"></textarea>
+    <div class="row">
+      <div><label for="a-test">Comando de tests</label><input id="a-test"></div>
+      <div><label for="a-iters">Iteraciones</label><input id="a-iters" type="number" min="1" max="10"></div>
+      <div><label for="a-ckpt">Modelo</label><select id="a-ckpt" class="ckpt"></select></div>
+    </div>
+    <div class="actions"><button class="primary" id="a-run">Ejecutar agente</button><span id="a-state" class="note"></span></div>
+    <div id="a-out"></div>
+  </section>
+
+  <section id="v-train" hidden>
+    <h2>Entrenamiento</h2>
+    <p class="lead">Se ejecuta como un proceso aparte. Detenerlo guarda un checkpoint del último step completo;
+      volver a iniciarlo continúa desde ahí, salvo que marques un run nuevo.</p>
+    <div class="row">
+      <div><label for="r-mode">Modo</label>
+        <select id="r-mode">
+          <option value="phase2">GRPO</option>
+          <option value="improve">Auto-mejora: currículo y reparación</option>
+          <option value="fix">Generate → Test → Fix sobre el catálogo</option>
+          <option value="phase1">Evaluar el modelo base</option>
+        </select></div>
+      <div><label class="inline"><input type="checkbox" id="r-fresh">Empezar un run nuevo</label></div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="r-start">Iniciar</button><button class="quiet" id="r-stop">Detener y guardar</button>
+      <span id="r-state" class="note"></span>
+    </div>
+    <p class="note" id="r-run"></p>
+    <div class="charts" id="r-charts"></div>
+    <h3>Salida del proceso</h3>
+    <pre id="r-log">Sin entrenamiento lanzado desde el panel.</pre>
+  </section>
+
+  <section id="v-runs" hidden>
+    <h2>Checkpoints</h2>
+    <p class="lead">Runs guardados en runs/. «Usar» carga ese checkpoint para las tareas y el agente;
+      «Ver métricas» muestra sus curvas en Entrenamiento.</p>
+    <div id="k-list"></div>
+  </section>
+
+  <section id="v-settings" hidden>
+    <h2>Ajustes</h2>
+    <p class="lead">Se guardan aparte (runs/ui) y se aplican a lo que lances desde el panel; config.yaml no se toca.
+      Los marcados cambian el estado del modelo: el siguiente entrenamiento empezará un run nuevo.</p>
+    <form id="s-form"></form>
+    <div class="actions"><button class="primary" id="s-save">Guardar</button>
+      <button class="quiet" id="s-reset">Volver a config.yaml</button><span id="s-state" class="note"></span></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const HELP = {
+  "fix.engine": "Motor de Fix (v1 = actual, v2 = candidatos y memoria)", "fix.feedback": "Feedback de Fix",
+  "fix.candidates": "Candidatos por ronda (Fix v2)", "improve.curriculum": "Currículo de improve",
+  "improve.feedback": "Feedback de las reparaciones (improve)", "improve.synthetic_per_step": "Reparaciones sintéticas por step",
+  "grpo.skip_zero_var": "GRPO: quitar grupos sin varianza (experimental)", "grpo.adv_norm": "GRPO: normalización de la ventaja",
+  "eval.select_best": "Cómo se elige best/", "rollouts.score_cache": "Caché de score", "agent.candidates": "Propuestas del agente por ronda",
+  "grpo.dynamic_sampling": "GRPO: reponer grupos sin varianza (experimental)", "eval.patience": "Early stopping: evaluaciones val sin mejora (0 = no)",
+  "num_rollouts": "Muestras por problema en cada step (G)",
+  "max_new_tokens": "Tokens máximos por respuesta",
+  "generation.temperature": "Temperatura de muestreo",
+  "generation.top_p": "top-p de muestreo",
+  "grpo.problems_per_step": "Problemas por step",
+  "grpo.max_steps": "Steps totales del run",
+  "grpo.kl_coef": "Peso del KL con el modelo base",
+  "grpo.updates_per_batch": "Actualizaciones por lote (>1: GRPO avanzado)",
+  "grpo.lr": "Learning rate",
+  "lora.r": "Rango de LoRA",
+  "lora.alpha": "Alpha de LoRA",
+  "checkpoint.every_steps": "Checkpoint cada N steps",
+  "checkpoint.eval_every_steps": "Evaluación cada N steps",
+  "fix.iters": "Rondas de corrección por defecto",
+  "improve.repair_per_step": "Grupos de reparación por step (auto-mejora)",
+  "agent.iters": "Iteraciones del agente",
+  "agent.test_cmd": "Comando de tests del agente",
+  "agent.timeout_s": "Tiempo máximo de los tests (s)",
+  "agent.max_new_tokens": "Tokens máximos por respuesta del agente",
+};
+
+function h(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined && v !== false) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids.flat()) if (k !== null && k !== undefined && k !== false) e.append(k instanceof Node ? k : String(k));
+  return e;
+}
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));  // p. ej. un 501 sin cuerpo JSON
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+
+const fmt = (x, d = 3) => (x === null || x === undefined ? "–" : typeof x === "number" ? String(Number(x.toFixed(d))) : String(x));
+const ERR = { wrong_answer: "resultado incorrecto", syntax: "error de sintaxis", no_entry: "no define la función pedida",
+              timeout: "demasiado lento o bucle infinito" };
+function errText(e) {
+  if (!e) return "falla";
+  if (ERR[e]) return ERR[e];
+  if (e.startsWith("runtime:")) return `lanza ${e.slice(8)}`;
+  if (e.startsWith("unsafe:")) return `código no permitido (${e.slice(7)})`;
+  if (e.startsWith("load:")) return "falla al cargar el código";
+  return e.startsWith("crash") ? "el proceso se cayó" : e;
+}
+const pct = (x) => (x === null || x === undefined ? "–" : `${Math.round(100 * x)} %`);
+const say = (el, text, bad = false) => { el.textContent = text; el.className = bad ? "note err" : "note"; };
+
+// ---------- navegación ----------
+for (const b of document.querySelectorAll("nav button")) {
+  b.addEventListener("click", () => show(b.dataset.view));
+}
+function show(view) {
+  for (const b of document.querySelectorAll("nav button")) {
+    if (b.dataset.view === view) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  }
+  for (const s of document.querySelectorAll("main > section")) s.hidden = s.id !== `v-${view}`;
+  if (view === "runs") loadRuns();
+  if (view === "settings") loadSettings();
+  if (view === "train") loadCharts();
+}
+
+// ---------- barra de estado ----------
+let training = { running: false };
+async function refresh() {
+  try {
+    const s = await api("/api/status");
+    training = s.training;
+    const g = s.gpu || {};
+    const job = s.jobs.find((j) => j.status === "running" || j.status === "queued");
+    $("#strip").replaceChildren(
+      h("span", {}, h("i", { class: `dot${training.running ? " on" : ""}` }),
+        training.running ? h("b", {}, `Entrenando (${training.mode})`) : "Sin entrenamiento en marcha"),
+      h("span", {}, "GPU ", h("b", {}, g.used_mb !== undefined ? `${(g.used_mb / 1024).toFixed(1)} / ${(g.total_mb / 1024).toFixed(1)} GB` : "sin datos"),
+        g.util !== undefined && g.util !== null ? `, ${g.util} %` : "", g.temp_c ? `, ${g.temp_c} °C` : ""),
+      h("span", {}, "Modelo del panel ", h("b", {}, s.engine.loaded ? (s.engine.checkpoint ? s.engine.checkpoint.split("/").slice(-3).join("/") : "base") : "sin cargar")),
+      job ? h("span", {}, "Trabajo ", h("b", {}, `${job.kind} ${job.status === "queued" ? "en cola" : "en curso"}`)) : "",
+    );
+    $("#r-log").textContent = training.log || (training.running
+      ? "Entrenamiento lanzado fuera del panel: su salida está en la terminal que lo lanzó."
+      : "Sin entrenamiento lanzado desde el panel.");
+    $("#r-start").disabled = training.running;
+    $("#r-stop").disabled = !training.running;
+    if (!training.running && training.exit_code !== undefined && training.exit_code !== null) {
+      say($("#r-state"), `El proceso terminó con código ${training.exit_code}.`, training.exit_code !== 0);
+    }
+  } catch (e) {
+    $("#strip").textContent = `Sin conexión con el panel: ${e.message}`;
+  }
+}
+
+// ---------- trabajos ----------
+async function follow(id, render, state) {
+  for (;;) {
+    const j = await api(`/api/jobs/${id}`);
+    render(j);
+    if (j.status === "done" || j.status === "error") {
+      if (j.status === "error") say(state, j.error, true);
+      return j;
+    }
+    say(state, j.status === "queued" ? "En cola…" : "Trabajando…");
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+async function loadProblems() {
+  const ps = await api("/api/problems");
+  $("#t-problem").replaceChildren(...ps.map((p) => h("option", { value: p.id },
+    `L${p.level} ${p.id}${p.source && p.source !== "core" ? ` [${p.split}]` : ""}`)));
+  const byId = Object.fromEntries(ps.map((p) => [p.id, p]));
+  const showPrompt = () => { $("#t-prompt").textContent = byId[$("#t-problem").value]?.prompt || ""; };
+  $("#t-problem").addEventListener("change", showPrompt);
+  showPrompt();
+}
+
+$("#t-src").addEventListener("change", () => {
+  const free = $("#t-src").value === "free";
+  $("#t-free").hidden = !free;
+  $("#t-catalog").hidden = free;
+});
+
+function renderFix(j, out) {
+  const chains = {};
+  for (const a of j.events) (chains[a.chain] ??= []).push(a);
+  const blocks = Object.entries(chains).map(([k, atts]) => h("div", {},
+    Object.keys(chains).length > 1 ? h("h3", {}, `Intento independiente ${Number(k) + 1}`) : "",
+    h("ol", { class: "chain" }, atts.map((a) => h("li", { class: a.solved ? "ok" : "", "data-n": a.round + 1 },
+      h("div", {},
+        h("span", { class: `verdict ${a.solved ? "ok" : "ko"}` }, a.solved ? "Pasa todos los tests" : `Falla: ${errText(a.error)}`),
+        h("span", { class: "bar", title: `reward ${fmt(a.reward)}` }, h("i", { style: `width:${Math.max(0, Math.min(100, a.reward * 100))}%` })),
+        h("span", { class: "note" }, `reward ${fmt(a.reward)}, ${a.ntok} tokens`)),
+      h("pre", {}, a.code || "(sin código)"),
+      a.feedback ? h("p", { class: "note" }, `Feedback para la siguiente ronda: ${a.feedback}`) : "")))));
+  const s = j.result?.summary;
+  const sum = s ? h("p", {}, `Resuelto a la primera: ${pct(s["solved@0"])}. `,
+    `Tras las correcciones: ${pct(s[`solved@${Object.keys(s).filter((k) => k.startsWith("solved@")).length - 1}`])}. `,
+    s.fix_rate !== null ? `Reparadas: ${pct(s.fix_rate)} de las que fallaron al principio.` : "") : "";
+  out.replaceChildren(sum, ...blocks);
+}
+
+$("#t-run").addEventListener("click", async () => {
+  const state = $("#t-state");
+  const body = { iters: Number($("#t-iters").value), chains: Number($("#t-chains").value) || 1, checkpoint: $("#t-ckpt").value };
+  if ($("#t-src").value === "free") Object.assign(body, { sig: $("#t-sig").value, doc: $("#t-doc").value, tests: $("#t-tests").value });
+  else body.problem = $("#t-problem").value;
+  $("#t-run").disabled = true;
+  try {
+    const job = await api("/api/fix", body);
+    const j = await follow(job.id, (x) => renderFix(x, $("#t-out")), state);
+    if (j.status === "done") say(state, `Guardado en ${j.result.run}`);
+  } catch (e) { say(state, e.message, true); }
+  $("#t-run").disabled = false;
+});
+
+function diffView(text) {
+  return h("pre", { class: "diff" }, text.split("\n").map((l) => h("span", {
+    class: l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : l.startsWith("@@") ? "hunk" : "",
+  }, `${l}\n`)));
+}
+
+function renderAgent(j, out, state) {
+  const base = j.events.find((e) => e.baseline)?.baseline;
+  const iters = j.events.filter((e) => !e.baseline);
+  const parts = [];
+  if (base) parts.push(h("p", {}, `Tests antes de empezar: ${base.passed ? "pasan" : "fallan"} (código ${fmt(base.code)}).`),
+    h("details", {}, h("summary", {}, "Salida inicial de los tests"), h("pre", {}, base.output)));
+  parts.push(h("ol", { class: "chain" }, iters.map((it) => h("li", { class: it.passed ? "ok" : "", "data-n": it.i + 1 },
+    h("div", {}, h("span", { class: `verdict ${it.passed ? "ok" : "ko"}` }, it.passed ? "Los tests pasan" : "Los tests fallan"),
+      h("span", { class: "note" }, ` en ${it.secs} s: ${it.files.length ? it.files.join(", ") : "sin cambios"}`)),
+    it.rejected.length ? h("p", { class: "err" }, `Ediciones rechazadas: ${it.rejected.join("; ")}`) : "",
+    h("details", {}, h("summary", {}, "Salida de los tests"), h("pre", {}, it.output)),
+    h("details", {}, h("summary", {}, "Respuesta del modelo"), h("pre", {}, it.response))))));
+  const r = j.result;
+  if (r) {
+    parts.push(h("h3", {}, r.diff ? "Cambios propuestos" : "El agente no propuso cambios"));
+    if (r.diff) parts.push(diffView(r.diff));
+    if (r.diff && r.status !== "accepted" && r.status !== "rejected") {
+      const decide = async (accept) => {
+        for (const b of btns) b.disabled = true;  // un doble clic mandaría la decisión dos veces
+        try {
+          const x = await api(`/api/jobs/${j.id}/${accept ? "accept" : "reject"}`, {});
+          renderAgent(x, out, state);
+          say(state, accept ? "Cambios aplicados al proyecto." : "Cambios descartados.");
+        } catch (e) {
+          say(state, e.message, true);
+          for (const b of btns) b.disabled = false;
+        }
+      };
+      const btns = [h("button", { class: "primary", onclick: () => decide(true) }, "Aplicar cambios al proyecto"),
+        h("button", { class: "quiet", onclick: () => decide(false) }, "Descartar")];
+      parts.push(h("div", { class: "actions" }, ...btns));
+    } else if (r.status === "accepted" || r.status === "rejected") {
+      parts.push(h("p", { class: "note" }, r.status === "accepted" ? "Aplicado al proyecto." : "Descartado."));
+    }
+  }
+  out.replaceChildren(...parts);
+}
+
+$("#a-run").addEventListener("click", async () => {
+  const state = $("#a-state");
+  const body = { repo: $("#a-repo").value.trim(), task: $("#a-task").value, test_cmd: $("#a-test").value,
+                 iters: Number($("#a-iters").value) || null, checkpoint: $("#a-ckpt").value };
+  $("#a-run").disabled = true;
+  try {
+    const job = await api("/api/agent", body);
+    const j = await follow(job.id, (x) => renderAgent(x, $("#a-out"), state), state);
+    if (j.status === "done") say(state, j.result.status === "passed" ? "Los tests pasan con los cambios." : "Los tests siguen fallando; revisa el diff antes de aplicar.", j.result.status !== "passed");
+  } catch (e) { say(state, e.message, true); }
+  $("#a-run").disabled = false;
+});
+
+// ---------- entrenamiento y métricas ----------
+$("#r-start").addEventListener("click", async () => {
+  try {
+    await api("/api/train/start", { mode: $("#r-mode").value, fresh: $("#r-fresh").checked });
+    say($("#r-state"), "Proceso lanzado.");
+    refresh();
+  } catch (e) { say($("#r-state"), e.message, true); }
+});
+$("#r-stop").addEventListener("click", async () => {
+  try {
+    await api("/api/train/stop", {});
+    say($("#r-state"), "Deteniendo: se guarda un checkpoint del último step completo.");
+  } catch (e) { say($("#r-state"), e.message, true); }
+});
+
+function chart(title, pts) {
+  pts = pts.filter((p) => typeof p[1] === "number" && Number.isFinite(p[1]));
+  if (pts.length < 2) return null;
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const sx = (x) => (x1 > x0 ? ((x - x0) / (x1 - x0)) * 100 : 50);
+  const sy = (y) => (y1 > y0 ? 38 - ((y - y0) / (y1 - y0)) * 36 : 20);
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 100 40");
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `${title}: último ${fmt(ys[ys.length - 1])}`);
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+  line.setAttribute("points", pts.map((p) => `${sx(p[0]).toFixed(2)},${sy(p[1]).toFixed(2)}`).join(" "));
+  svg.append(line);
+  return h("div", { class: "chart" },
+    h("div", { class: "t" }, h("span", {}, title), h("b", {}, fmt(ys[ys.length - 1]))),
+    svg, h("div", { class: "note" }, `mín ${fmt(y0)}, máx ${fmt(y1)}`));
+}
+
+function mchart(title, series) {
+  series = series.map(([n, p]) => [n, p.filter((q) => typeof q[1] === "number" && Number.isFinite(q[1]))])
+    .filter(([, p]) => p.length >= 2);
+  if (!series.length) return null;
+  const all = series.flatMap(([, p]) => p), xs = all.map((p) => p[0]), ys = all.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const sx = (x) => (x1 > x0 ? ((x - x0) / (x1 - x0)) * 100 : 50);
+  const sy = (y) => (y1 > y0 ? 38 - ((y - y0) / (y1 - y0)) * 36 : 20);
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 100 40");
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("role", "img");
+  const last = series.map(([n, p]) => `${n} ${fmt(p[p.length - 1][1])}`).join(", ");
+  svg.setAttribute("aria-label", `${title}: ${last}`);
+  series.forEach(([, p], i) => {
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    line.setAttribute("class", `s${i % 5}`);
+    line.setAttribute("points", p.map((q) => `${sx(q[0]).toFixed(2)},${sy(q[1]).toFixed(2)}`).join(" "));
+    svg.append(line);
+  });
+  const colors = ["var(--act)", "var(--warn)", "var(--pass)", "var(--fail)", "var(--muted)"];
+  return h("div", { class: "chart" }, h("div", { class: "t" }, h("span", {}, title)), svg,
+    h("div", { class: "note leg" }, series.map(([n, p], i) => h("span", {}, h("i", { style: `background:${colors[i % 5]}` }),
+      `${n} ${fmt(p[p.length - 1][1])}`))));
+}
+
+let chartRun = null;
+async function loadCharts(run) {
+  if (run) chartRun = run;
+  if (!chartRun) {
+    const runs = await api("/api/runs");
+    chartRun = runs.find((r) => (r.kind === "phase2" || r.kind === "exp") && r.has_metrics)?.path;
+  }
+  if (!chartRun) { $("#r-run").textContent = "Aún no hay métricas: se escriben al entrenar."; $("#r-charts").replaceChildren(); return; }
+  const m = await api(`/api/metrics?run=${encodeURIComponent(chartRun)}`);
+  const steps = m.metrics.filter((r) => r.loss !== undefined), evals = m.metrics.filter((r) => r.eval_reward !== undefined);
+  const splits = m.metrics.filter((r) => r.event === "eval_split");
+  const s = (k) => steps.map((r) => [r.step, r[k]]);
+  const e = (k) => splits.map((r) => [r.step, r[k]]);
+  const errKeys = [...new Set(steps.flatMap((r) => Object.keys(r.err_rates || {})))].slice(0, 5);
+  const comp = ["compile", "visible", "hidden", "generated", "solved"];
+  const t0 = m.gpu.length ? m.gpu[0].t : 0;
+  $("#r-run").textContent = `Run: ${chartRun}`;
+  $("#r-charts").replaceChildren(...[
+    chart("Reward medio", s("reward")),
+    chart("Eval pass@1", evals.map((r) => [r.step, r["eval_pass@1"]])),
+    chart("Eval reward", evals.map((r) => [r.step, r.eval_reward])),
+    chart("Loss", s("loss")),
+    chart("KL", s("kl")),
+    chart("Tokens/s de generación", s("tok_s")),
+    chart("Segundos por step", s("secs")),
+    chart("Reparaciones resueltas", steps.filter((r) => r.fix_n).map((r) => [r.step, r.fix_solved / r.fix_n])),
+    chart("VRAM usada (GB)", m.gpu.map((g) => [g.t - t0, g.used_mb !== undefined ? g.used_mb / 1024 : null])),
+    mchart("pass@1 por split", [["eval (legacy)", evals.map((r) => [r.step, r["eval_pass@1"]])],
+      ["train", e("train_pass@1")], ["val", e("val_pass@1")], ["test", e("test_pass@1")]]),
+    mchart("pass@16 por split", [["train", e("train_pass@16")], ["val", e("val_pass@16")], ["test", e("test_pass@16")]]),
+    mchart("Train vs val (pass@1)", [["train", splits.map((r) => [r.step, r["train_pass@1"] ?? (r.gap_train_val ?? NaN) + (r["val_pass@1"] ?? NaN)])],
+      ["val", e("val_pass@1")]]),
+    mchart("Componentes del reward", comp.map((k) => [k, s(`comp_${k}`)])),
+    mchart("Compilación y truncado", [["compila", s("compile_rate")], ["truncado", s("trunc_rate")], ["casi (visibles OK)", s("near_miss")]]),
+    mchart("Errores por tipo", errKeys.map((k) => [k, steps.map((r) => [r.step, (r.err_rates || {})[k] ?? 0])])),
+    mchart("Fix: tasa y repetición", [["arreglo", steps.filter((r) => r.fix_n).map((r) => [r.step, r.fix_solved / r.fix_n])],
+      ["repetición", s("imp_fix_repeat")], ["sintéticas", steps.filter((r) => r.imp_syn_n).map((r) => [r.step, r.imp_syn_solved / r.imp_syn_n])]]),
+    mchart("Diversidad y grupos sin varianza", [["diversidad", s("diversity")], ["varianza 0", s("zero_var_frac")]]),
+    mchart("Currículo", [["nivel abierto", s("imp_open_level")], ["cuota frontera", s("imp_quota_front")], ["cuota repaso", s("imp_quota_reh")]]),
+    mchart("Tokens por step", [["generados", s("gen_tokens")], ["entrenados", s("tokens")], ["por muestra", s("ntok_mean")]]),
+    mchart("Tiempo por etapa (s)", [["total", s("secs")], ["generación", s("t_gen")], ["espera sandbox", s("t_score_wait")],
+      ["training", steps.map((r) => [r.step, (r.t_ref ?? 0) + (r.t_old ?? 0) + (r.t_update ?? 0)])], ["reparación", s("t_repair")]]),
+    mchart("ms por paso de decodificación", [["ms/paso", s("ms_per_tok_step")]]),
+    mchart("VRAM pico por step (GB)", [["asignada", s("vram_gb")], ["reservada", s("vram_reserved_gb")]]),
+    mchart("Presión de VRAM / steps anómalos", [["paginación", steps.map((r) => [r.step, r.vram_paging ? 1 : 0])],
+      ["lento", steps.map((r) => [r.step, r.slow ? 1 : 0])], ["uso GPU/100", steps.map((r) => [r.step, (r.sys_util_mean ?? NaN) / 100])],
+      ["potencia/200W", steps.map((r) => [r.step, (r.sys_power_mean_w ?? NaN) / 200])]]),
+    mchart("Sistema: CPU % y RAM", [["CPU %", s("sys_cpu_mean_pct")], ["RAM libre (GB)", steps.map((r) => [r.step, (r.sys_ram_avail_min_mb ?? NaN) / 1024])],
+      ["swap (GB)", steps.map((r) => [r.step, (r.sys_swap_used_max_mb ?? NaN) / 1024])]]),
+    mchart("Movimiento de la política", [["KL ref", s("kl")], ["approx KL old", s("approx_kl")], ["clip", s("clip_frac")]]),
+    mchart("Entropía por token", [["entropía", s("entropy")]]),
+    mchart("Val: Δpass@1 pareado vs modelo de partida", [["Δ", e("val_delta_pass@1")]]),
+    mchart("Caché de score (aciertos)", [["hit rate", steps.filter((r) => (r.cache_hits ?? 0) + (r.cache_misses ?? 0) > 0)
+      .map((r) => [r.step, r.cache_hits / (r.cache_hits + r.cache_misses)])]]),
+  ].filter(Boolean));
+}
+
+// ---------- checkpoints ----------
+function fillCheckpoints(runs) {
+  const opts = [h("option", { value: "" }, "Modelo base")];
+  for (const r of runs.filter((x) => x.kind === "phase2" || x.kind === "exp")) {
+    for (const c of r.checkpoints) opts.push(h("option", { value: c.path }, `${r.name} / ${c.name}${c.best ? " (mejor eval)" : ""}`));
+  }
+  for (const sel of document.querySelectorAll("select.ckpt")) {
+    const keep = sel.value;
+    sel.replaceChildren(...opts.map((o) => o.cloneNode(true)));
+    sel.value = keep;
+  }
+}
+
+async function loadRuns() {
+  const runs = await api("/api/runs");
+  fillCheckpoints(runs);
+  const use = (path) => {
+    for (const sel of document.querySelectorAll("select.ckpt")) sel.value = path;
+    say($("#k-state"), `Se usará ${path.split("/").slice(-3).join("/")} en Tarea y Agente.`);
+  };
+  const parts = [h("p", { id: "k-state", class: "note" })];
+  const train = runs.filter((r) => r.kind === "phase2" || r.kind === "exp");
+  if (!train.length) parts.push(h("p", { class: "note" }, "Todavía no hay runs de entrenamiento."));
+  for (const r of train) {
+    parts.push(h("h3", {}, r.name),
+      h("div", { class: "actions" }, r.has_metrics ? h("button", { class: "quiet", onclick: () => { show("train"); loadCharts(r.path); } }, "Ver métricas") : ""),
+      r.checkpoints.length ? h("table", {}, h("tr", {}, ["Checkpoint", "Step", "Reward medio", "Eval reward", "Eval pass@1", ""].map((x) => h("th", {}, x))),
+        r.checkpoints.map((c) => h("tr", {}, h("td", {}, c.name + (c.best ? " (mejor eval)" : "")), h("td", { class: "num" }, fmt(c.step)),
+          h("td", { class: "num" }, fmt(c.metrics.reward_mean)), h("td", { class: "num" }, fmt(c.metrics.eval_reward)),
+          h("td", { class: "num" }, fmt(c.metrics["eval_pass@1"])),
+          h("td", {}, h("button", { class: "quiet", onclick: () => use(c.path) }, "Usar")))))
+        : h("p", { class: "note" }, "Sin checkpoints todavía."));
+  }
+  const fixes = runs.filter((r) => r.kind === "fix" && r.summary);
+  if (fixes.length) {
+    parts.push(h("h3", {}, "Generate → Test → Fix"), h("table", {},
+      h("tr", {}, ["Run", "Cadenas", "A la primera", "Al final", "Reparadas"].map((x) => h("th", {}, x))),
+      fixes.map((r) => {
+        const s = r.summary, last = Object.keys(s).filter((k) => k.startsWith("solved@")).length - 1;
+        return h("tr", {}, h("td", {}, r.name), h("td", { class: "num" }, fmt(s.chains)), h("td", { class: "num" }, pct(s["solved@0"])),
+          h("td", { class: "num" }, pct(s[`solved@${last}`])), h("td", { class: "num" }, pct(s.fix_rate)));
+      })));
+  }
+  const evs = runs.filter((r) => r.kind === "eval" && r.evals);
+  if (evs.length) {
+    const pc = (x) => (x == null ? "-" : pct(x));
+    parts.push(h("h3", {}, "Evaluaciones"), h("table", {},
+      h("tr", {}, ["Run", "Modelo", "Step", "Split", "pass@1", "IC 95 %", "Greedy"].map((x) => h("th", {}, x))),
+      evs.flatMap((r) => r.evals.map((e) => h("tr", {}, h("td", {}, r.name), h("td", {}, e.label ?? "-"),
+        h("td", { class: "num" }, e.step ?? "-"), h("td", {}, e.split ?? "-"), h("td", { class: "num" }, pc(e.pass1)),
+        h("td", { class: "num" }, Array.isArray(e.ci) ? `${pc(e.ci[0])} – ${pc(e.ci[1])}` : "-"),
+        h("td", { class: "num" }, pc(e.greedy)))))));
+  }
+  const agents = runs.filter((r) => r.kind === "agent");
+  if (agents.length) {
+    parts.push(h("h3", {}, "Sesiones del agente"), h("table", {},
+      h("tr", {}, ["Sesión", "Proyecto", "Tarea", "Iteraciones", "Estado"].map((x) => h("th", {}, x))),
+      agents.map((r) => h("tr", {}, h("td", {}, r.name), h("td", {}, r.repo), h("td", {}, r.task.slice(0, 80)),
+        h("td", { class: "num" }, r.iters), h("td", {}, r.status)))));
+  }
+  $("#k-list").replaceChildren(...parts);
+}
+
+// ---------- ajustes ----------
+async function loadSettings() {
+  const c = await api("/api/config");
+  const field = (k, v) => {
+    const opts = typeof v === "boolean" ? ["true", "false"] : (c.choices || {})[k];
+    if (!opts) return h("input", { id: `s-${k}`, name: k, value: v ?? "", type: typeof v === "number" ? "number" : "text", step: "any" });
+    const sel = h("select", { id: `s-${k}`, name: k, "data-bool": typeof v === "boolean" ? "1" : "" },
+      opts.map((o) => h("option", { value: String(o) }, String(o))));
+    sel.value = String(v);
+    return sel;
+  };
+  $("#s-form").replaceChildren(h("div", { class: "row" }, Object.entries(c.values).map(([k, v]) => h("div", {},
+    h("label", { for: `s-${k}` }, `${HELP[k] || k}${c.state_keys.includes(k) ? " (run nuevo)" : ""}`),
+    field(k, v)))));
+  $("#t-iters").value ||= c.values["fix.iters"];
+  $("#a-iters").placeholder = c.values["agent.iters"];
+  $("#a-test").placeholder = c.values["agent.test_cmd"];
+}
+$("#s-save").addEventListener("click", async (e) => {
+  e.preventDefault();
+  const values = {};
+  for (const el of $("#s-form").querySelectorAll("input, select"))
+    values[el.name] = el.type === "number" ? Number(el.value) : el.dataset.bool ? el.value === "true" : el.value;
+  try { await api("/api/config", values); say($("#s-state"), "Guardado. Se aplica a lo próximo que lances."); }
+  catch (err) { say($("#s-state"), err.message, true); }
+});
+$("#s-reset").addEventListener("click", async (e) => {
+  e.preventDefault();
+  try { await api("/api/config/reset", {}); await loadSettings(); say($("#s-state"), "Valores de config.yaml restaurados."); }
+  catch (err) { say($("#s-state"), err.message, true); }
+});
+
+// ---------- arranque ----------
+(async () => {
+  await Promise.all([loadProblems(), loadSettings(), api("/api/runs").then(fillCheckpoints)]).catch((e) => say($("#t-state"), e.message, true));
+  refresh();
+  setInterval(refresh, 2500);
+  setInterval(() => { if (!$("#v-train").hidden && training.running) loadCharts(); }, 10000);
+})();
+</script>
+</body>
+</html>

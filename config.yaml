@@ -1,0 +1,137 @@
+# Configuración principal. Lo que define el estado del modelo (model, dtype, lora.*, grpo.lr, grpo.weight_decay y,
+# si está activo, growth.*) entra en config_hash: si cambia, el entrenamiento empieza un run nuevo. El resto es
+# operativo y puede cambiarse entre reanudaciones. Las configs de experimentos heredan de este fichero (extends).
+seed: 1234
+model: Qwen/Qwen2.5-Coder-0.5B-Instruct
+dtype: bf16                 # bf16 | fp16 | auto. Sin cuantización: el loader no acepta otra cosa.
+context_length: 2048        # prompt + generación
+num_rollouts: 8             # muestras por problema (tamaño de grupo de GRPO)
+max_new_tokens: 384
+reward_weights: {compile: 0.05, visible: 0.10, hidden: 0.25, generated: 0.20, solved: 0.40}
+sandbox_limits: {timeout_s: 20, case_timeout_s: 2.0, cpu_s: 15, mem_mb: 1024, fsize_mb: 4, nofile: 32, max_timeouts: 4}
+dataset:
+  levels: [0, 1, 2, 3]
+  sets: [core, catalog]     # core = los 19 originales | catalog = problems/catalog. Sólo el split train entra en el
+                            # entrenamiento: phase2/improve nunca usan val ni test.
+
+prompt:
+  system: "Reply with one Python code block defining the requested function. No prose."
+  prefill_fence: true       # la respuesta arranca en "```python\n": sólo código, sin tokens de preámbulo
+
+generation: {temperature: 0.8, top_p: 0.95, chunk: 32, min_new_tokens_floor: 96}
+vram_margin: 0.85           # fracción del presupuesto libre que pueden ocupar los autotuners de generación y training
+vram:                       # tope del asignador de PyTorch (model/vram.py): pasarse da OOM (recuperable) en vez de que
+  budget_gb: auto           # Windows/WSL2 pagine la VRAM a la RAM (steps 25x más lentos sin error). auto = libre al
+  headroom_gb: 0.6          # arrancar - headroom_gb | número de GB | off
+reward: {unsafe_penalty: -0.5, n_generated: 24, control: null}  # control: random = reward espurio (sólo para experimentos de control)
+
+# LoRA (peft). target_modules = todos los proj lineales de Qwen2. Sin dropout: en RL on-policy el gradiente debe ser el
+# de la política que muestreó. La referencia del KL es el mismo modelo con los adapters apagados (sin copia en VRAM).
+lora:
+  enabled: true
+  r: 32
+  alpha: 64
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+# GRPO (Shao et al. 2024). Detalles en training/grpo.py.
+# updates_per_batch (U) x minibatches (M) = optimizer.step por lote de rollouts. U*M = 1: una actualización (ratio 1,
+# el clip no actúa). U*M > 1: PPO (logp_old antes de actualizar, ratio y clip reales). logp a la temperatura de muestreo.
+grpo:
+  clip_eps: 0.2
+  kl_coef: 0.04
+  max_grad_norm: 1.0
+  lr: 1.0e-5
+  weight_decay: 0.0
+  warmup_steps: 0           # warmup lineal del lr de la política
+  problems_per_step: 6
+  micro_bs: auto            # autotuner con el PEOR caso (prompt más largo + max_new_tokens)
+  max_steps: 300
+  updates_per_batch: 1
+  minibatches: 1
+  logp_temperature: generation  # generation = generation.temperature | número
+  head_chunk_mb: 512        # logits fp32 por trozo en la cabeza (training/logprob.py)
+  skip_zero_var: false      # quita del loss los grupos sin varianza de reward
+  adv_norm: std             # std = (r-media)/std (GRPO) | mean = r-media (Dr. GRPO) | batch = (r-media)/std del lote (Lite PPO)
+  dynamic_sampling: false   # repone grupos sin varianza con problemas nuevos del pool (y los quita del loss)
+  dynamic_max_factor: 2.0   # ...hasta este factor x problems_per_step problemas generados por step
+
+# Crecimiento en profundidad (model/growth.py): bloques identidad (copia de la capa anterior con o_proj/down_proj a 0)
+# que no cambian la función al nacer y se entrenan enteros en fp32; LoRA sigue sólo en las capas originales.
+growth:
+  enabled: false
+  method: depth
+  schedule: [{step: 0, new_layers: 4}]   # p. ej. progresivo: [{step: 0, new_layers: 2}, {step: 20, new_layers: 2}]
+  lr: 5.0e-5
+  weight_decay: 0.0
+  warmup_steps: 5
+  zero_modules: [o_proj, down_proj]
+
+checkpoint: {every_steps: 20, eval_every_steps: 20, keep_last: 3}
+
+eval:                       # evaluación por split (train.py eval --split, y durante el entrenamiento si se pide)
+  n: 16                     # muestras por problema (pass@k con k <= n)
+  ks: [1, 5, 10, 16]
+  greedy: true              # además, una respuesta greedy por problema
+  seed: 999983              # semilla propia de muestreo y tests generados (fuera de seed..seed+max_steps)
+  bootstrap: 1000           # remuestreos para los IC 95 %
+  during_train: [val]       # splits a evaluar en cada eval de phase2/improve, p. ej. [val] o [train, val]
+  during_train_n: 8         # muestras por problema durante el entrenamiento (las finales usan eval.n)
+  paired_base: true         # compara cada eval (pareado por problema) con el modelo de partida, cacheado
+  select_best: val          # legacy = best/ por eval_reward en train | val = por val pass@1
+  patience: 0               # early stopping: parar tras N evaluaciones val sin mejora (0 = desactivado)
+  min_delta: 0.0            # mejora mínima de val pass@1 que cuenta como mejora
+
+fix:
+  iters: 3                  # rondas de corrección tras el primer intento (train.py fix, panel)
+  engine: v1                # v1 = bucle simple | v2 = k candidatos, memoria, reinicios, presupuesto
+  feedback: basic           # basic = mensaje corto | counterexample = contraejemplo reducido, línea, timeout...
+  candidates: 4             # v2: candidatos por ronda
+  temperature: null         # v2: temperatura de las correcciones (null = generation.temperature)
+  patience: 2               # v2: rondas sin mejora (o misma firma de error) antes de reiniciar desde cero
+  restarts: 1               # v2: reinicios permitidos por cadena
+  budget: 16                # v2: candidatos máximos por cadena
+  pool: 64                  # entradas del pool de contraejemplos (nunca contiene entradas ocultas)
+
+improve:
+  repair_per_step: 3        # grupos de reparación por step en train.py improve (x num_rollouts muestras)
+  curriculum: v1            # v1 = pesos p(1-p), niveles que se abren | v2 = dominio por nivel, repaso, recuperación,
+                            # hard mining; las claves de abajo sólo actúan con v2
+  feedback: counterexample  # v2: feedback de los grupos de reparación (basic | counterexample)
+  synthetic_per_step: 1     # v2: grupos de reparación sintética (mutantes de problemas train); 0 = desactivado
+  master_ema: 0.7           # nivel dominado: EMA media del nivel...
+  master_val: 0.5           # ...y val pass@1 del nivel (si hay problemas val de ese nivel)
+  min_obs: 3                # ...con >= 80 % de sus problemas observados min_obs veces
+  rehearsal: 0.15           # repaso mínimo de niveles dominados
+  recovery: 0.25            # repaso si el val de un nivel dominado cae más de recovery_drop
+  recovery_drop: 0.15
+  stall_window: 20          # frontera estancada: acierto medio < stall_rate en las últimas stall_window observaciones
+  stall_rate: 0.05
+  frontier_cap: 0.2         # cuota máxima de la frontera estancada
+  reset: false              # true = ignora improve.json del run (reinicio limpio del currículo)
+
+rollouts:
+  score_cache: true         # el mismo código para el mismo problema/semilla sólo entra una vez al sandbox
+  cache_size: 4096
+
+sandbox:
+  backend: auto             # auto | bwrap | rlimit
+  allow_unsafe: false       # true permite el backend rlimit (NO aísla filesystem ni red)
+  workers: auto
+  allowed_imports: [math, collections, heapq, bisect, itertools, functools, re, string, typing,
+                    dataclasses, fractions, decimal, statistics, operator, copy, array, random,
+                    json, enum, abc, datetime, textwrap]
+
+monitor: {interval_s: 2.0}
+
+agent:                    # python agent.py / panel
+  iters: 4                # rondas editar -> testear
+  patience: 0             # >0: parar si tantas rondas seguidas no mejoran los tests. 0 (desactivado): con 2, el
+                          # A/B pareado resolvió menos (0.5B 4/20 frente a 8/20; 1.5B 13/20 frente a 16/20): los repos
+                          # perdidos se resolvían en la 3.ª o 4.ª ronda
+  rollback: true          # una edición que deja los tests peor que el mejor estado se deshace
+  test_cmd: python -m pytest -x -q -p no:cacheprovider
+  timeout_s: 120          # por ejecución de los tests
+  mem_mb: 4096            # RLIMIT_AS de los tests: súbelo si importan torch
+  context_length: 8192    # prompt + respuesta del agente (Qwen2.5-Coder admite 32k)
+  max_new_tokens: 1024
+  candidates: 1           # >1: k propuestas por ronda, se aplica la que más tests pasa (en copias de trabajo)

@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+.conda/
+
+# Secretos / configuración local
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.secret
+secrets/
+credentials/
+
+# Modelos y checkpoints
+checkpoints/
+checkpoint/
+models/
+*.safetensors
+*.safetensors.index.json
+*.bin
+*.pt
+*.pth
+*.ckpt
+
+# Experimentos / resultados generados
+runs/
+outputs/
+wandb/
+mlruns/
+tensorboard/
+logs/
+*.log
+
+# Datos temporales / caché
+cache/
+caches/
+tmp/
+temp/
+*.cache
+
+# Hugging Face
+.huggingface/
+hf_cache/
+transformers_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# JetBrains
+.idea/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+
+# Linux / WSL
+*~
+*.swp
+*.swo
